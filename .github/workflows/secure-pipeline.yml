@@ -1,18 +1,184 @@
-dependency-scan:
-  runs-on: ubuntu-latest
-  steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+name: Secure CI/CD Pipeline
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
-    - name: Install dependencies
-      run: pip install -r requirements.txt
+jobs:
+  # SAST - Статический анализ
+  sast:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Run GitHub-native dependency scan
-      uses: actions/dependency-review-action@v3
-      with:
-        fail-on-severity: high
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+      - name: Run Bandit SAST
+        run: |
+          pip install bandit
+          bandit -r . -f json -o bandit-results.json || true
+
+      - name: Upload Bandit results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: bandit-results.json
+
+  # Dependency Scanning
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v3
+        with:
+          fail-on-severity: high
+
+  # Secret Detection
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Detect secrets with Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+
+  # Container Scanning
+  container-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build container image
+        run: docker build -t django-allauth:${{ github.sha }} .
+
+      - name: Scan with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'django-allauth:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'HIGH,CRITICAL'
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # Build and Push
+  build:
+    runs-on: ubuntu-latest
+    needs: [sast, dependency-scan, secret-scan, container-scan]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t django-allauth:${{ github.sha }} .
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to GHCR
+        run: |
+          docker tag django-allauth:${{ github.sha }} ghcr.io/${{ github.repository }}:latest
+          docker push ghcr.io/${{ github.repository }}:latest
+
+  # Deploy to VPS
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "🚀 Starting deployment to VPS..."
+            # Pull latest image
+            docker pull ghcr.io/${{ github.repository }}:latest
+            
+            # Stop and remove old container
+            docker stop allauth_demo || true
+            docker rm allauth_demo || true
+            
+            # Run new container
+            docker run -d \
+              --name allauth_demo \
+              -p 8000:8000 \
+              -e DEBUG=False \
+              -e ALLOWED_HOSTS='*' \
+              -e SECRET_KEY='django-insecure-production-2024' \
+              ghcr.io/${{ github.repository }}:latest
+            
+            echo "✅ Successfully deployed to http://217.198.5.48:8000"
+
+  # DAST - Dynamic Analysis
+  dast:
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Wait for app to start
+        run: sleep 30
+
+      - name: OWASP ZAP Scan
+        uses: zaproxy/action-baseline@v0.10.0
+        with:
+          target: http://217.198.5.48:8000
+
+      - name: Nuclei Scan
+        uses: projectdiscovery/nuclei-action@main
+        with:
+          target: http://217.198.5.48:8000
+
+  # Security Gate
+  security-gate:
+    runs-on: ubuntu-latest
+    needs: [sast, dependency-scan, secret-scan, container-scan, dast]
+    if: always()
+    steps:
+      - name: Security Quality Gate
+        run: |
+          echo "🔒 SECURITY GATE CHECK"
+          echo "======================"
+          
+          if [[ "${{ needs.sast.result }}" == "failure" ]]; then
+            echo "❌ BLOCKED: SAST failed"
+            exit 1
+          fi
+          
+          if [[ "${{ needs.dependency-scan.result }}" == "failure" ]]; then
+            echo "❌ BLOCKED: Vulnerable dependencies found"
+            exit 1
+          fi
+          
+          if [[ "${{ needs.secret-scan.result }}" == "failure" ]]; then
+            echo "❌ BLOCKED: Secrets detected in code"
+            exit 1
+          fi
+          
+          echo "✅ SECURITY GATE PASSED"
+          echo "All security checks completed successfully"
