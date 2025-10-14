@@ -1,12 +1,14 @@
-
 version: '3.8'
 
 services:
   web:
-    build: .
+    image: ghcr.io/${{ github.repository }}:latest
+    container_name: allauth_demo
     ports:
       - "8000:8000"
     environment:
       - DEBUG=False
-      - DATABASE_URL=sqlite:///db.sqlite3
+      - DJANGO_SETTINGS_MODULE=example.settings
+      - ALLOWED_HOSTS=*
+      - SECRET_KEY=django-insecure-production-secret-key-2024
     restart: unless-stopped
