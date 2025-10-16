@@ -1,0 +1,20 @@
+name: Debug Test
+
+on: [push]
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Check Files
+        run: |
+          echo "📁 Checking project structure..."
+          ls -la
+          echo ""
+          echo "🔍 Checking for key files..."
+          [ -f "Dockerfile" ] && echo "✅ Dockerfile found" || echo "❌ Dockerfile missing"
+          [ -f "requirements.txt" ] && echo "✅ requirements.txt found" || echo "❌ requirements.txt missing"
+          [ -f ".github/workflows/secure-pipeline.yml" ] && echo "✅ secure-pipeline.yml found" || echo "❌ secure-pipeline.yml missing"
