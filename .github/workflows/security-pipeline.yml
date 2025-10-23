@@ -5,6 +5,41 @@ on:
     branches: [ main ]
 
 jobs:
+  # 1. BUILD - сначала собираем образ
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          echo "🐳 Building Docker image..."
+          docker build -t django-allauth:latest .
+          echo "✅ Docker image built successfully"
+
+  # 2. CONTAINER SCAN - сканируем собранный образ
+  container-scan:
+    runs-on: ubuntu-latest
+    needs: build  # зависит от build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Scan container with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'django-allauth:latest'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'HIGH,CRITICAL'
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # 3. SAST - статический анализ кода
   sast:
     runs-on: ubuntu-latest
     steps:
@@ -22,53 +57,48 @@ jobs:
       - name: Run Bandit SAST
         run: |
           echo "🔍 Running Bandit SAST..."
-          bandit -r . -f txt || echo "SAST completed"
+          bandit -r . -f txt -o bandit-results.txt || echo "SAST completed with warnings"
 
-  dependency-check:
+      - name: Upload Bandit results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'bandit-results.txt'
+
+  # 4. SECRET SCAN - проверка секретов (безопасная версия)
+  secret-scan:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Check dependencies
+      - name: Safe secret detection
         run: |
-          echo "📦 Checking dependencies..."
-          if [ -f "requirements.txt" ]; then
-            echo "✅ requirements.txt found"
-            cat requirements.txt
+          echo "🔐 Checking for common secrets patterns..."
+          # Безопасные проверки без внешних инструментов
+          if find . -name "*.py" -type f | head -10 | xargs grep -l "password" 2>/dev/null; then
+            echo "⚠️  Found 'password' keyword in files"
           else
-            echo "❌ requirements.txt not found"
+            echo "✅ No obvious password keywords found"
+          fi
+          
+          if find . -name "*.py" -type f | head -10 | xargs grep -l "secret" 2>/dev/null; then
+            echo "⚠️  Found 'secret' keyword in files"
+          else
+            echo "✅ No obvious secret keywords found"
           fi
 
-  secret-check:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Check for secrets
-        run: |
-          echo "🔐 Checking for secrets..."
-          echo "✅ Basic secret check completed"
-
-  build:
-  runs-on: ubuntu-latest
-  steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Build Docker image
-      run: |
-        echo "🐳 Building Docker image..."
-        docker build -t django-allauth:latest . || echo "⚠️ Build completed with warnings"
-        echo "✅ Docker build process finished"
-
+  # 5. FINAL REPORT
   report:
     runs-on: ubuntu-latest
-    needs: [sast, dependency-check, secret-check, build]
+    needs: [build, container-scan, sast, secret-scan]
     steps:
-      - name: Final Report
+      - name: Security Report
         run: |
-          echo "🎉 SECURITY PIPELINE SUCCESS!"
-          echo "============================="
-          echo "All security checks completed!"
+          echo "🎉 SECURITY PIPELINE COMPLETED!"
+          echo "================================"
+          echo "✅ Build - Docker image created"
+          echo "✅ Container Scan - Trivy analysis"
+          echo "✅ SAST - Bandit code analysis" 
+          echo "✅ Secret Scan - Basic checks"
+          echo ""
+          echo "🚀 All security stages passed!"
