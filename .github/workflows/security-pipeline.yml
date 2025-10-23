@@ -12,11 +12,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-    - name: Build Docker image
-      run: |
-        echo "🐳 Building Docker image..."
-        docker build -t django-allauth:latest . || echo "⚠️ Build completed with warnings"
-        echo "✅ Docker build process finished"
+      - name: Build Docker image
+        run: |
+          echo "🐳 Building Docker image..."
+          docker build -t django-allauth:latest . || echo "⚠️ Build completed with warnings"
+          echo "✅ Docker build process finished"
 
   # 2. CONTAINER SCAN - сканируем собранный образ
   container-scan:
